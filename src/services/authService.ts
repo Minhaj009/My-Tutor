@@ -72,7 +72,7 @@ export class AuthService {
     }
   }
 
-  // Sign up new user with optimized flow
+  // Sign up new user with enhanced error handling
   static async signUp(data: SignUpData) {
     try {
       // Create user account
@@ -91,7 +91,15 @@ export class AuthService {
       })
 
       if (authError) {
-        // Check for Supabase connection issues first
+        console.error('Supabase auth error:', authError)
+        
+        // Handle specific database error from Supabase backend
+        if (authError.message.includes('Database error saving new user') || 
+            authError.message.includes('unexpected_failure')) {
+          throw new Error('🚨 Supabase Project Issue Detected\n\nYour Supabase project appears to be paused or experiencing database issues.\n\nTo fix this:\n1. Go to https://supabase.com/dashboard\n2. Find your project and click "Resume" if it shows as paused\n3. Wait for the project to fully restart (2-3 minutes)\n4. Try signing up again\n\nIf the project is already active, there may be a temporary Supabase service issue. Please try again in a few minutes.')
+        }
+        
+        // Check for Supabase connection issues
         if (authError.message.includes('SUPABASE CONNECTION FAILED') || 
             authError.message.includes('Failed to fetch') ||
             authError.message.includes('NetworkError')) {
@@ -112,7 +120,18 @@ export class AuthService {
           throw new Error('Authentication service is not configured. Please set up your Supabase credentials.')
         }
         
-        throw new Error(authError.message)
+        // Handle rate limiting
+        if (authError.message.includes('rate limit') || authError.message.includes('too many requests')) {
+          throw new Error('Too many signup attempts. Please wait a few minutes before trying again.')
+        }
+        
+        // Handle email confirmation issues
+        if (authError.message.includes('email confirmation')) {
+          throw new Error('Email confirmation is required but not properly configured. Please contact support.')
+        }
+        
+        // Generic error with helpful context
+        throw new Error(`Signup failed: ${authError.message}\n\nIf this persists, your Supabase project may need attention. Check https://supabase.com/dashboard`)
       }
 
       if (authData.user) {

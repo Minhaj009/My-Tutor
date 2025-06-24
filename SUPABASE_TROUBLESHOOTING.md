@@ -1,5 +1,25 @@
 # Supabase Connection Troubleshooting Guide
 
+## 🚨 URGENT: "Database error saving new user" Fix
+
+If you're seeing the error **"Database error saving new user"** during signup, this means your Supabase project is likely **paused** or experiencing backend issues.
+
+### Immediate Fix Steps:
+
+1. **Go to your Supabase Dashboard**: [https://supabase.com/dashboard](https://supabase.com/dashboard)
+2. **Find your project** in the project list
+3. **Check if it shows "PAUSED"** - if so, click **"Resume"**
+4. **Wait 2-3 minutes** for the project to fully restart
+5. **Restart your development server**: `npm run dev`
+6. **Try signing up again**
+
+### Why This Happens:
+- Supabase free tier projects automatically pause after 1 week of inactivity
+- The authentication service can't save user data when the database is paused
+- This affects the entire signup process, not just your app code
+
+---
+
 ## Common Issues and Solutions
 
 ### 1. "Failed to fetch" Errors
@@ -110,7 +130,21 @@ Run through these steps to quickly identify the issue:
    - Restart the development server
    - Try again
 
-### 6. Getting Help
+### 6. Authentication-Specific Issues
+
+#### **"Database error saving new user"**
+- **Cause**: Supabase project is paused or database backend is unavailable
+- **Solution**: Resume your Supabase project and wait for full restart
+
+#### **"unexpected_failure" during signup**
+- **Cause**: Backend database connectivity issues
+- **Solution**: Check project status and restart if needed
+
+#### **Rate Limiting Errors**
+- **Cause**: Too many signup/signin attempts
+- **Solution**: Wait 5-10 minutes before trying again
+
+### 7. Getting Help
 
 If none of these solutions work:
 
@@ -122,7 +156,7 @@ If none of these solutions work:
 
 4. **Community Help**: Ask for help in the Supabase Discord or GitHub discussions
 
-### 7. Prevention Tips
+### 8. Prevention Tips
 
 To avoid these issues in the future:
 
@@ -139,3 +173,14 @@ Based on your current configuration:
 - **Status**: The credentials appear to be valid, but the project may be paused or experiencing connectivity issues
 
 **Recommended Action**: Check if your Supabase project is active and restart it if necessary.
+
+## Error Code Reference
+
+| Error Message | Likely Cause | Solution |
+|---------------|--------------|----------|
+| "Database error saving new user" | Project paused | Resume project in dashboard |
+| "unexpected_failure" | Backend database issue | Check project status |
+| "Failed to fetch" | Network/connection issue | Check credentials and connectivity |
+| "Auth session missing" | Session expired | Sign in again |
+| "Invalid login credentials" | Wrong email/password | Check credentials |
+| "Too many requests" | Rate limiting | Wait before retrying |
