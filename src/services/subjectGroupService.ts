@@ -338,7 +338,7 @@ export class SubjectGroupService {
         .from('user_databases')
         .select('subject_group, subjects')
         .eq('user_id', userId)
-        .single();
+        .maybeSingle();
 
       if (error || !data) {
         return null;
