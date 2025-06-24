@@ -68,7 +68,14 @@ const createMockClient = () => {
           single: () => Promise.resolve({ data: null, error: mockError })
         })
       })
-    })
+    }),
+    storage: {
+      from: () => ({
+        upload: () => Promise.resolve({ data: null, error: mockError }),
+        remove: () => Promise.resolve({ error: null }),
+        getPublicUrl: () => ({ data: { publicUrl: '' } })
+      })
+    }
   }
 }
 
@@ -77,7 +84,7 @@ if (!hasValidConfig) {
   supabase = createMockClient()
 } else {
   try {
-    // Create Supabase client with timeout and retry configuration
+    // Create Supabase client with enhanced configuration
     supabase = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         autoRefreshToken: true,
@@ -92,7 +99,7 @@ if (!hasValidConfig) {
         fetch: (url, options = {}) => {
           // Add timeout to fetch requests
           const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout
+          const timeoutId = setTimeout(() => controller.abort(), 15000) // 15 second timeout
           
           return fetch(url, {
             ...options,
@@ -109,7 +116,7 @@ if (!hasValidConfig) {
       }
     })
 
-    // Test connection only in development and handle errors gracefully
+    // Test connection in development with better error handling
     if (import.meta.env.DEV) {
       const testConnection = async () => {
         try {
@@ -124,16 +131,19 @@ if (!hasValidConfig) {
           if (error) {
             if (error.code === 'PGRST116' || error.code === '42P01') {
               console.log('✅ Supabase connected - database setup may be needed')
+            } else if (error.message.includes('Database error') || 
+                      error.message.includes('unexpected_failure')) {
+              console.warn('⚠️ Supabase project may be paused or experiencing issues')
+              console.warn('💡 Go to https://supabase.com/dashboard and check if your project needs to be resumed')
             } else {
               console.warn('⚠️ Supabase connection issue:', error.message)
-              // Don't replace with mock client, just log the warning
             }
           } else {
             console.log('✅ Supabase connection successful')
           }
         } catch (error) {
           console.warn('⚠️ Supabase connection test failed:', error instanceof Error ? error.message : 'Unknown error')
-          // Don't replace with mock client for connection test failures
+          console.warn('💡 This may indicate your Supabase project is paused or experiencing issues')
         }
       }
 
@@ -158,6 +168,8 @@ export interface UserProfile {
   board?: string
   area?: string
   profile_picture_url?: string
+  subject_group?: string
+  subjects?: string[]
   created_at: string
   updated_at: string
 }
@@ -207,8 +219,8 @@ export interface UserDatabase {
   database_name: string
   grade: string
   board?: string
-  subjects: string[]
   subject_group?: string
+  subjects: string[]
   created_at: string
   updated_at: string
 }

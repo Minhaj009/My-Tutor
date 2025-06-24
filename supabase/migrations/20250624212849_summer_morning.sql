@@ -1,23 +1,27 @@
 /*
-  # Complete Database Schema Setup
+  # Complete Database Setup for MyEduPro
 
   1. New Tables
-    - `user_profiles` - User profile information
-    - `user_progress_stats` - User learning progress statistics  
-    - `subject_progress` - Progress tracking per subject
-    - `study_sessions` - Record of study activities
+    - `user_profiles` - User profile information with grade, board, area details
+    - `user_progress_stats` - Overall progress statistics and study metrics
+    - `subject_progress` - Individual subject progress tracking
+    - `study_sessions` - Record of all study activities
     - `user_databases` - User-specific database configurations
 
   2. Security
     - Enable RLS on all tables
-    - Add policies for authenticated users to manage their own data
-    - Create triggers for automatic profile creation and progress initialization
+    - Add comprehensive policies for authenticated users
+    - Secure functions with proper error handling
 
-  3. Functions
-    - `handle_new_user()` - Automatically create user profile on signup
-    - `update_updated_at_column()` - Update timestamps on record changes
-    - `initialize_user_progress()` - Set up initial progress tracking
-    - `create_user_database_on_profile_update()` - Create user database when profile is updated
+  3. Triggers & Functions
+    - Auto-create profiles for new users
+    - Initialize progress tracking
+    - Update timestamps automatically
+    - Handle database creation on profile updates
+
+  4. Performance
+    - Add indexes for frequently queried columns
+    - Optimize for dashboard and analytics queries
 */
 
 -- Create function to update updated_at timestamp
@@ -35,6 +39,11 @@ DROP TABLE IF EXISTS subject_progress CASCADE;
 DROP TABLE IF EXISTS user_databases CASCADE;
 DROP TABLE IF EXISTS user_progress_stats CASCADE;
 DROP TABLE IF EXISTS user_profiles CASCADE;
+
+-- Drop existing functions if they exist
+DROP FUNCTION IF EXISTS handle_new_user() CASCADE;
+DROP FUNCTION IF EXISTS initialize_user_progress() CASCADE;
+DROP FUNCTION IF EXISTS create_user_database_on_profile_update() CASCADE;
 
 -- Create user_profiles table
 CREATE TABLE user_profiles (
@@ -108,12 +117,12 @@ CREATE TABLE user_databases (
 );
 
 -- Create indexes for better performance
-CREATE INDEX idx_user_progress_stats_user_id ON user_progress_stats(user_id);
-CREATE INDEX idx_subject_progress_user_id ON subject_progress(user_id);
-CREATE INDEX idx_subject_progress_subject ON subject_progress(user_id, subject_name);
-CREATE INDEX idx_study_sessions_user_id ON study_sessions(user_id);
-CREATE INDEX idx_study_sessions_date ON study_sessions(user_id, session_date);
-CREATE INDEX idx_user_databases_user_id ON user_databases(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_progress_stats_user_id ON user_progress_stats(user_id);
+CREATE INDEX IF NOT EXISTS idx_subject_progress_user_id ON subject_progress(user_id);
+CREATE INDEX IF NOT EXISTS idx_subject_progress_subject ON subject_progress(user_id, subject_name);
+CREATE INDEX IF NOT EXISTS idx_study_sessions_user_id ON study_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_study_sessions_date ON study_sessions(user_id, session_date);
+CREATE INDEX IF NOT EXISTS idx_user_databases_user_id ON user_databases(user_id);
 
 -- Enable RLS on all tables
 ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
@@ -121,26 +130,6 @@ ALTER TABLE user_progress_stats ENABLE ROW LEVEL SECURITY;
 ALTER TABLE subject_progress ENABLE ROW LEVEL SECURITY;
 ALTER TABLE study_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_databases ENABLE ROW LEVEL SECURITY;
-
--- Drop existing policies if they exist
-DROP POLICY IF EXISTS "Users can insert own profile" ON user_profiles;
-DROP POLICY IF EXISTS "Users can view own profile" ON user_profiles;
-DROP POLICY IF EXISTS "Users can update own profile" ON user_profiles;
-
-DROP POLICY IF EXISTS "Users can insert own progress stats" ON user_progress_stats;
-DROP POLICY IF EXISTS "Users can view own progress stats" ON user_progress_stats;
-DROP POLICY IF EXISTS "Users can update own progress stats" ON user_progress_stats;
-
-DROP POLICY IF EXISTS "Users can insert own subject progress" ON subject_progress;
-DROP POLICY IF EXISTS "Users can view own subject progress" ON subject_progress;
-DROP POLICY IF EXISTS "Users can update own subject progress" ON subject_progress;
-
-DROP POLICY IF EXISTS "Users can insert own study sessions" ON study_sessions;
-DROP POLICY IF EXISTS "Users can view own study sessions" ON study_sessions;
-
-DROP POLICY IF EXISTS "Users can insert own database" ON user_databases;
-DROP POLICY IF EXISTS "Users can view own database" ON user_databases;
-DROP POLICY IF EXISTS "Users can update own database" ON user_databases;
 
 -- Create RLS policies for user_profiles
 CREATE POLICY "Users can insert own profile"
@@ -235,15 +224,6 @@ CREATE POLICY "Users can update own database"
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
--- Drop existing triggers
-DROP TRIGGER IF EXISTS update_user_profiles_updated_at ON user_profiles;
-DROP TRIGGER IF EXISTS update_user_progress_stats_updated_at ON user_progress_stats;
-DROP TRIGGER IF EXISTS update_subject_progress_updated_at ON subject_progress;
-DROP TRIGGER IF EXISTS update_user_databases_updated_at ON user_databases;
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-DROP TRIGGER IF EXISTS initialize_user_progress_trigger ON user_profiles;
-DROP TRIGGER IF EXISTS create_user_database_trigger ON user_profiles;
-
 -- Create triggers to automatically update updated_at
 CREATE TRIGGER update_user_profiles_updated_at
   BEFORE UPDATE ON user_profiles
@@ -265,78 +245,92 @@ CREATE TRIGGER update_user_databases_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
--- Create function to handle new user registration
+-- Create function to handle new user registration with robust error handling
 CREATE OR REPLACE FUNCTION handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.user_profiles (id, first_name, last_name, grade)
-  VALUES (
-    NEW.id,
-    COALESCE(NEW.raw_user_meta_data->>'first_name', ''),
-    COALESCE(NEW.raw_user_meta_data->>'last_name', ''),
-    COALESCE(NEW.raw_user_meta_data->>'grade', '')
-  );
+  -- Create user profile with error handling
+  BEGIN
+    INSERT INTO public.user_profiles (id, first_name, last_name, grade)
+    VALUES (
+      NEW.id,
+      COALESCE(NEW.raw_user_meta_data->>'first_name', ''),
+      COALESCE(NEW.raw_user_meta_data->>'last_name', ''),
+      COALESCE(NEW.raw_user_meta_data->>'grade', '')
+    );
+  EXCEPTION
+    WHEN unique_violation THEN
+      -- Profile already exists, update it instead
+      UPDATE public.user_profiles 
+      SET 
+        first_name = COALESCE(NEW.raw_user_meta_data->>'first_name', first_name),
+        last_name = COALESCE(NEW.raw_user_meta_data->>'last_name', last_name),
+        grade = COALESCE(NEW.raw_user_meta_data->>'grade', grade),
+        updated_at = now()
+      WHERE id = NEW.id;
+    WHEN OTHERS THEN
+      -- Log the error but don't fail the user creation
+      RAISE WARNING 'Failed to create user profile for user %: %', NEW.id, SQLERRM;
+  END;
+  
   RETURN NEW;
-EXCEPTION
-  WHEN OTHERS THEN
-    -- Log the error but don't fail the user creation
-    RAISE WARNING 'Failed to create user profile: %', SQLERRM;
-    RETURN NEW;
 END;
 $$ language 'plpgsql' security definer;
 
--- Create function to initialize user progress
+-- Create function to initialize user progress with error handling
 CREATE OR REPLACE FUNCTION initialize_user_progress()
 RETURNS TRIGGER AS $$
 BEGIN
   -- Initialize user progress stats
-  INSERT INTO public.user_progress_stats (user_id)
-  VALUES (NEW.id)
-  ON CONFLICT (user_id) DO NOTHING;
+  BEGIN
+    INSERT INTO public.user_progress_stats (user_id)
+    VALUES (NEW.id)
+    ON CONFLICT (user_id) DO NOTHING;
+  EXCEPTION
+    WHEN OTHERS THEN
+      RAISE WARNING 'Failed to initialize user progress for user %: %', NEW.id, SQLERRM;
+  END;
   
   RETURN NEW;
-EXCEPTION
-  WHEN OTHERS THEN
-    RAISE WARNING 'Failed to initialize user progress: %', SQLERRM;
-    RETURN NEW;
 END;
 $$ language 'plpgsql' security definer;
 
--- Create function to create user database on profile update
+-- Create function to create user database on profile update with error handling
 CREATE OR REPLACE FUNCTION create_user_database_on_profile_update()
 RETURNS TRIGGER AS $$
 BEGIN
   -- Only create database if grade is set and database doesn't exist
   IF NEW.grade IS NOT NULL AND NEW.grade != '' THEN
-    INSERT INTO public.user_databases (
-      user_id,
-      database_name,
-      grade,
-      board,
-      subject_group,
-      subjects
-    )
-    VALUES (
-      NEW.id,
-      'user_' || replace(NEW.id::text, '-', '_') || '_db',
-      NEW.grade,
-      NEW.board,
-      NEW.subject_group,
-      NEW.subjects
-    )
-    ON CONFLICT (user_id) DO UPDATE SET
-      grade = NEW.grade,
-      board = NEW.board,
-      subject_group = NEW.subject_group,
-      subjects = NEW.subjects,
-      updated_at = now();
+    BEGIN
+      INSERT INTO public.user_databases (
+        user_id,
+        database_name,
+        grade,
+        board,
+        subject_group,
+        subjects
+      )
+      VALUES (
+        NEW.id,
+        'user_' || replace(NEW.id::text, '-', '_') || '_db',
+        NEW.grade,
+        NEW.board,
+        NEW.subject_group,
+        NEW.subjects
+      )
+      ON CONFLICT (user_id) DO UPDATE SET
+        grade = NEW.grade,
+        board = NEW.board,
+        subject_group = NEW.subject_group,
+        subjects = NEW.subjects,
+        updated_at = now();
+    EXCEPTION
+      WHEN OTHERS THEN
+        RAISE WARNING 'Failed to create user database for user %: %', NEW.id, SQLERRM;
+    END;
   END IF;
   
   RETURN NEW;
-EXCEPTION
-  WHEN OTHERS THEN
-    RAISE WARNING 'Failed to create user database: %', SQLERRM;
-    RETURN NEW;
 END;
 $$ language 'plpgsql' security definer;
 
@@ -354,3 +348,79 @@ CREATE TRIGGER initialize_user_progress_trigger
 CREATE TRIGGER create_user_database_trigger
   AFTER UPDATE ON user_profiles
   FOR EACH ROW EXECUTE FUNCTION create_user_database_on_profile_update();
+
+-- Create storage bucket for profile pictures if it doesn't exist
+DO $$
+BEGIN
+  INSERT INTO storage.buckets (id, name, public) 
+  VALUES ('profile-pictures', 'profile-pictures', true)
+  ON CONFLICT (id) DO NOTHING;
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE WARNING 'Failed to create storage bucket: %', SQLERRM;
+END $$;
+
+-- Create storage policies for profile pictures
+DO $$
+BEGIN
+  -- Policy for uploading profile pictures
+  CREATE POLICY "Users can upload own profile pictures"
+    ON storage.objects
+    FOR INSERT
+    TO authenticated
+    WITH CHECK (bucket_id = 'profile-pictures' AND auth.uid()::text = (storage.foldername(name))[1]);
+EXCEPTION
+  WHEN duplicate_object THEN
+    -- Policy already exists, ignore
+    NULL;
+  WHEN OTHERS THEN
+    RAISE WARNING 'Failed to create upload policy: %', SQLERRM;
+END $$;
+
+DO $$
+BEGIN
+  -- Policy for updating profile pictures
+  CREATE POLICY "Users can update own profile pictures"
+    ON storage.objects
+    FOR UPDATE
+    TO authenticated
+    USING (bucket_id = 'profile-pictures' AND auth.uid()::text = (storage.foldername(name))[1]);
+EXCEPTION
+  WHEN duplicate_object THEN
+    -- Policy already exists, ignore
+    NULL;
+  WHEN OTHERS THEN
+    RAISE WARNING 'Failed to create update policy: %', SQLERRM;
+END $$;
+
+DO $$
+BEGIN
+  -- Policy for deleting profile pictures
+  CREATE POLICY "Users can delete own profile pictures"
+    ON storage.objects
+    FOR DELETE
+    TO authenticated
+    USING (bucket_id = 'profile-pictures' AND auth.uid()::text = (storage.foldername(name))[1]);
+EXCEPTION
+  WHEN duplicate_object THEN
+    -- Policy already exists, ignore
+    NULL;
+  WHEN OTHERS THEN
+    RAISE WARNING 'Failed to create delete policy: %', SQLERRM;
+END $$;
+
+DO $$
+BEGIN
+  -- Policy for public access to profile pictures
+  CREATE POLICY "Profile pictures are publicly accessible"
+    ON storage.objects
+    FOR SELECT
+    TO public
+    USING (bucket_id = 'profile-pictures');
+EXCEPTION
+  WHEN duplicate_object THEN
+    -- Policy already exists, ignore
+    NULL;
+  WHEN OTHERS THEN
+    RAISE WARNING 'Failed to create public access policy: %', SQLERRM;
+END $$;
