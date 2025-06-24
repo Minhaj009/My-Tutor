@@ -15,6 +15,7 @@ interface AuthContextType {
   error: string | null
   isNewUser: boolean
   hasSubjectGroup: boolean
+  connectionStatus: 'connected' | 'disconnected' | 'checking'
   signUp: (data: any) => Promise<void>
   signIn: (data: any) => Promise<void>
   signOut: () => Promise<void>
@@ -23,6 +24,8 @@ interface AuthContextType {
   markProfileCompleted: () => void
   recordStudySession: (sessionType: 'lesson' | 'test' | 'ai_tutor' | 'materials', subject: string, durationMinutes: number, score?: number) => Promise<void>
   refreshProgress: () => Promise<void>
+  retryConnection: () => Promise<void>
+  dismissError: () => void
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -49,6 +52,65 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [error, setError] = useState<string | null>(null)
   const [isNewUser, setIsNewUser] = useState(false)
   const [hasSubjectGroup, setHasSubjectGroup] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking')
+
+  const dismissError = () => {
+    setError(null)
+  }
+
+  const handleSupabaseError = (error: any, context: string) => {
+    console.error(`${context} error:`, error)
+    
+    if (error?.name === 'SupabaseConnectionError' || error?.name === 'SupabaseTimeoutError') {
+      setConnectionStatus('disconnected')
+      setError(error.message)
+      return
+    }
+    
+    if (error?.message?.includes('Failed to fetch') || 
+        error?.message?.includes('NetworkError') ||
+        error?.message?.includes('Connection timeout') ||
+        error?.message?.includes('fetch is not defined')) {
+      setConnectionStatus('disconnected')
+      setError('🚨 Cannot Connect to Supabase\n\nYour Supabase project appears to be unavailable.\n\nTo fix this:\n1. Go to https://supabase.com/dashboard\n2. Check if your project is paused and resume it\n3. Wait 2-3 minutes for full restart\n4. Refresh this page')
+      return
+    }
+    
+    if (error?.message?.includes('Database error saving new user') ||
+        error?.message?.includes('unexpected_failure')) {
+      setConnectionStatus('disconnected')
+      setError('🚨 Supabase Project Issue\n\nYour Supabase project appears to be paused or experiencing database issues.\n\nTo fix this:\n1. Go to https://supabase.com/dashboard\n2. Find your project and click "Resume" if paused\n3. Wait 2-3 minutes for full restart\n4. Try again')
+      return
+    }
+    
+    // For other errors, don't change connection status
+    const errorMessage = error instanceof Error ? error.message : `${context} failed`
+    setError(errorMessage)
+  }
+
+  const retryConnection = async () => {
+    try {
+      setConnectionStatus('checking')
+      setError(null)
+      
+      // Test connection by trying to get current user
+      const currentUser = await AuthService.getCurrentUser()
+      
+      setConnectionStatus('connected')
+      setUser(currentUser)
+      
+      if (currentUser) {
+        // Reload profile and progress data
+        await loadUserProfile(currentUser.id)
+        await loadUserProgress(currentUser.id)
+        await checkSubjectGroupSelection(currentUser.id)
+      }
+      
+      console.log('✅ Connection restored successfully')
+    } catch (error) {
+      handleSupabaseError(error, 'Connection retry')
+    }
+  }
 
   const loadUserProfile = async (userId: string) => {
     try {
@@ -56,35 +118,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       console.log('Loading profile for user:', userId)
       const userProfile = await AuthService.getUserProfile(userId)
       setProfile(userProfile)
+      setConnectionStatus('connected')
       console.log('Profile loaded successfully:', userProfile)
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to load user profile'
-      
-      // Handle expected scenarios (no profile found) differently from actual errors
-      if (errorMessage.includes('No rows found') || 
-          errorMessage.includes('PGRST116') || 
-          errorMessage.includes('not configured')) {
-        console.log('No user profile found for user:', userId, '- this is expected for new users')
-      } else {
-        console.error('Error fetching user profile:', error)
-      }
-      
-      // Only set error for critical issues, not missing profiles or connection issues
-      if (!errorMessage.includes('No rows found') && 
-          !errorMessage.includes('PGRST116') && 
-          !errorMessage.includes('not configured')) {
-        
-        // For connection issues, provide a more user-friendly message
-        if (errorMessage.includes('Unable to connect') || 
-            errorMessage.includes('Connection timeout') ||
-            errorMessage.includes('Failed to fetch')) {
-          setError('Unable to load profile data. Please check your internet connection and try refreshing the page.')
-        } else if (errorMessage.includes('Database table not found')) {
-          setError('Database setup incomplete. Please contact support or check the setup instructions.')
-        } else {
-          setError(errorMessage)
-        }
-      }
+      handleSupabaseError(error, 'Load user profile')
       setProfile(null)
     }
   }
@@ -140,7 +177,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Refresh progress after recording session
       await refreshProgress()
     } catch (error) {
-      console.error('Error recording study session:', error)
+      handleSupabaseError(error, 'Record study session')
       throw error
     }
   }
@@ -163,17 +200,18 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     let mounted = true
     let subscription: any = null
 
-    // Get initial session with better error handling
+    // Get initial session with enhanced error handling
     const getInitialSession = async () => {
       try {
         setError(null)
+        setConnectionStatus('checking')
         console.log('Getting initial session...')
         
         // Reduced timeout for faster failure detection
         const controller = new AbortController()
         const timeoutId = setTimeout(() => {
           controller.abort()
-        }, 5000) // Reduced to 5 seconds timeout
+        }, 8000) // 8 seconds timeout
         
         try {
           const currentUser = await AuthService.getCurrentUser()
@@ -183,6 +221,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           
           console.log('Initial session result:', currentUser ? 'User found' : 'No user')
           setUser(currentUser)
+          setConnectionStatus('connected')
           
           if (currentUser) {
             // Check if this is a new user
@@ -199,7 +238,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           
           if (authError instanceof Error && authError.name === 'AbortError') {
             console.warn('Session check timeout - continuing without authentication')
-            // Don't throw error, just continue without auth
+            setConnectionStatus('disconnected')
+            setError('🚨 Connection Timeout\n\nUnable to connect to Supabase. Your project may be paused.\n\nPlease check https://supabase.com/dashboard')
           } else {
             throw authError
           }
@@ -214,13 +254,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           setSubjectProgress([])
           setHasSubjectGroup(false)
           
-          // Only set error for critical issues
-          const errorMessage = error instanceof Error ? error.message : 'Session initialization failed'
-          if (!errorMessage.includes('not configured') && 
-              !errorMessage.includes('timeout') &&
-              !errorMessage.includes('Failed to fetch')) {
-            setError('Authentication service temporarily unavailable. Please try refreshing the page.')
-          }
+          handleSupabaseError(error, 'Initial session')
         }
       } finally {
         if (mounted) {
@@ -231,7 +265,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
     getInitialSession()
 
-    // Listen for auth changes with optimized handling and proper error handling
+    // Listen for auth changes with enhanced error handling
     try {
       const authListener = AuthService.onAuthStateChange(
         async (event, session) => {
@@ -243,6 +277,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           setUser(session?.user ?? null)
           
           if (session?.user) {
+            setConnectionStatus('connected')
+            
             // Check if this is a new user (from sign up)
             const isNewUserFlag = localStorage.getItem('isNewUser') === 'true'
             setIsNewUser(isNewUserFlag)
@@ -274,7 +310,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       console.error('Error setting up auth state listener:', error)
       // Set a user-friendly error message
       if (mounted) {
-        setError('Authentication service not available. Please check your connection and try refreshing the page.')
+        handleSupabaseError(error, 'Auth state listener setup')
         setLoading(false)
       }
     }
@@ -296,20 +332,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       setLoading(true)
       setError(null)
+      setConnectionStatus('checking')
       
       // Mark as new user before sign up
       localStorage.setItem('isNewUser', 'true')
       setIsNewUser(true)
       
       await AuthService.signUp(data)
+      setConnectionStatus('connected')
       // Don't set loading to false here - let auth state change handle it
     } catch (error) {
       setLoading(false)
       // Clear new user flag on error
       localStorage.removeItem('isNewUser')
       setIsNewUser(false)
-      const errorMessage = error instanceof Error ? error.message : 'Sign up failed'
-      setError(errorMessage)
+      handleSupabaseError(error, 'Sign up')
       throw error
     }
   }
@@ -318,17 +355,18 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       setLoading(true)
       setError(null)
+      setConnectionStatus('checking')
       
       // Clear any existing new user flag for sign in
       localStorage.removeItem('isNewUser')
       setIsNewUser(false)
       
       await AuthService.signIn(data)
+      setConnectionStatus('connected')
       // Don't set loading to false here - let auth state change handle it
     } catch (error) {
       setLoading(false)
-      const errorMessage = error instanceof Error ? error.message : 'Sign in failed'
-      setError(errorMessage)
+      handleSupabaseError(error, 'Sign in')
       throw error
     }
   }
@@ -349,9 +387,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setSubjectProgress([])
       setSession(null)
       setHasSubjectGroup(false)
+      setConnectionStatus('connected')
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Sign out failed'
-      setError(errorMessage)
+      handleSupabaseError(error, 'Sign out')
       throw error
     } finally {
       setLoading(false)
@@ -376,6 +414,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       
       const updatedProfile = await AuthService.updateUserProfile(user.id, profileData, profilePicture)
       setProfile(updatedProfile)
+      setConnectionStatus('connected')
       
       // If this was a new user completing their profile, initialize progress
       if (isNewUser) {
@@ -388,8 +427,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Check subject group status after profile update
       await checkSubjectGroupSelection(user.id)
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Profile update failed'
-      setError(errorMessage)
+      handleSupabaseError(error, 'Profile update')
       throw error
     }
   }
@@ -404,6 +442,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     error,
     isNewUser,
     hasSubjectGroup,
+    connectionStatus,
     signUp,
     signIn,
     signOut,
@@ -412,6 +451,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     markProfileCompleted,
     recordStudySession,
     refreshProgress,
+    retryConnection,
+    dismissError,
   }
 
   return (
